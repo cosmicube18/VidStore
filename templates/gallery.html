@@ -323,7 +323,7 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
 
     try {
       // 1. Get single-use signed upload URL from FastAPI (< 1 KB payload to Vercel)
-      const ticketRes = await fetch('/api/upload-ticket', {
+      const ticketRes = await fetch('/upload-ticket', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -365,7 +365,7 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
         });
 
         // 3. Finalize record in database
-        await fetch('/api/upload-complete', {
+        await fetch('/upload-complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

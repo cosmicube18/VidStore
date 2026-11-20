@@ -403,6 +403,7 @@ class UploadCompleteRequest(BaseModel):
     file_size: int
 
 
+@app.post("/upload-ticket")
 @app.post("/api/upload-ticket")
 def create_upload_ticket(
     payload: UploadTicketRequest,
@@ -447,6 +448,7 @@ def create_upload_ticket(
         }
 
 
+@app.post("/upload-complete")
 @app.post("/api/upload-complete")
 def finalize_upload(
     payload: UploadCompleteRequest,
