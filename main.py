@@ -51,19 +51,33 @@ import storage
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+
+if os.environ.get("VERCEL"):
+    UPLOAD_DIR = Path("/tmp/uploads")
+else:
+    UPLOAD_DIR = BASE_DIR / "uploads"
+
+try:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database tables on startup
-    init_db()
+    # Initialize database tables safely
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Database init warning: {e}")
     yield
 
 app = FastAPI(title="VidStore", lifespan=lifespan, docs_url=None, redoc_url=None)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+# Mount static files safely
+static_dir = BASE_DIR / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 

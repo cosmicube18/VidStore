@@ -17,7 +17,16 @@ import urllib.request
 
 # Load Keys.env or .env if present locally
 BASE_DIR = Path(__file__).resolve().parent
-LOCAL_UPLOAD_DIR = BASE_DIR / "uploads"
+
+if os.environ.get("VERCEL"):
+    LOCAL_UPLOAD_DIR = Path("/tmp/uploads")
+else:
+    LOCAL_UPLOAD_DIR = BASE_DIR / "uploads"
+
+try:
+    LOCAL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 # Check environment or local files
 def _load_env_fallback():
