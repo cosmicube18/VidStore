@@ -1,0 +1,30 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment files and credentials
+.env
+.env.local
+.env.*.local
+Keys.env
+
+# Local SQLite database
+*.db
+vidstore.db
+
+# Local uploads storage
+uploads/
+
+# Vercel
+.vercel/
+
+# Operating system files
+.DS_Store
+Thumbs.db

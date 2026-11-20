@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VidStore — Sign In</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="auth-body">
+
+  <div class="auth-card">
+
+    <!-- Logo / Brand -->
+    <div class="auth-brand">
+      <div class="auth-logo">▶</div>
+      <h1 class="auth-title">VidStore</h1>
+      <p class="auth-subtitle">Your private photo &amp; video gallery</p>
+    </div>
+
+    <!-- Tab switcher -->
+    <div class="auth-tabs" id="authTabs">
+      <button
+        class="auth-tab {% if tab == 'login' %}active{% endif %}"
+        data-tab="login"
+        onclick="switchTab('login')"
+        type="button"
+      >Sign In</button>
+      <button
+        class="auth-tab {% if tab == 'register' %}active{% endif %}"
+        data-tab="register"
+        onclick="switchTab('register')"
+        type="button"
+      >Register</button>
+    </div>
+
+    <!-- Error banner -->
+    {% if error %}
+    <div class="auth-error" id="authError">
+      <span>&#9888;</span> {{ error }}
+    </div>
+    {% endif %}
+
+    <!-- Login form -->
+    <form
+      class="auth-form {% if tab != 'login' %}hidden{% endif %}"
+      id="formLogin"
+      method="post"
+      action="/login"
+    >
+      <div class="field-group">
+        <label for="login-username">Username</label>
+        <input
+          id="login-username"
+          type="text"
+          name="username"
+          placeholder="Enter username"
+          required
+          autocomplete="username"
+        />
+      </div>
+      <div class="field-group">
+        <label for="login-password">Password</label>
+        <div class="password-wrap">
+          <input
+            id="login-password"
+            type="password"
+            name="password"
+            placeholder="Enter password"
+            required
+            autocomplete="current-password"
+          />
+          <button type="button" class="pw-toggle" onclick="togglePw('login-password', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-full" type="submit">Sign In</button>
+      <p class="auth-switch">
+        No account?
+        <a href="#" onclick="switchTab('register')">Register here</a>
+      </p>
+    </form>
+
+    <!-- Register form -->
+    <form
+      class="auth-form {% if tab != 'register' %}hidden{% endif %}"
+      id="formRegister"
+      method="post"
+      action="/register"
+    >
+      <div class="field-group">
+        <label for="reg-username">Username</label>
+        <input
+          id="reg-username"
+          type="text"
+          name="username"
+          placeholder="3–32 characters"
+          required
+          minlength="3"
+          maxlength="32"
+          autocomplete="username"
+        />
+      </div>
+      <div class="field-group">
+        <label for="reg-password">Password</label>
+        <div class="password-wrap">
+          <input
+            id="reg-password"
+            type="password"
+            name="password"
+            placeholder="At least 8 characters"
+            required
+            minlength="8"
+            autocomplete="new-password"
+          />
+          <button type="button" class="pw-toggle" onclick="togglePw('reg-password', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="reg-confirm">Confirm Password</label>
+        <div class="password-wrap">
+          <input
+            id="reg-confirm"
+            type="password"
+            placeholder="Repeat password"
+            required
+            minlength="8"
+            autocomplete="new-password"
+            oninput="checkMatch()"
+          />
+        </div>
+        <small class="pw-match-msg hidden" id="pwMatchMsg">Passwords do not match</small>
+      </div>
+      <button class="btn btn-primary btn-full" type="submit" id="regSubmit">Create Account</button>
+      <p class="auth-switch">
+        Already have an account?
+        <a href="#" onclick="switchTab('login')">Sign in</a>
+      </p>
+    </form>
+
+  </div><!-- /.auth-card -->
+
+  <script>
+    function switchTab(tab) {
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.auth-form').forEach(f => f.classList.add('hidden'));
+      document.querySelector(`.auth-tab[data-tab="${tab}"]`).classList.add('active');
+      document.getElementById(tab === 'login' ? 'formLogin' : 'formRegister').classList.remove('hidden');
+      const err = document.getElementById('authError');
+      if (err) err.style.display = 'none';
+    }
+
+    function togglePw(id, btn) {
+      const input = document.getElementById(id);
+      const isText = input.type === 'text';
+      input.type = isText ? 'password' : 'text';
+      btn.style.opacity = isText ? '0.5' : '1';
+    }
+
+    function checkMatch() {
+      const pw   = document.getElementById('reg-password').value;
+      const conf = document.getElementById('reg-confirm').value;
+      const msg  = document.getElementById('pwMatchMsg');
+      const btn  = document.getElementById('regSubmit');
+      if (conf && pw !== conf) {
+        msg.classList.remove('hidden');
+        btn.disabled = true;
+      } else {
+        msg.classList.add('hidden');
+        btn.disabled = false;
+      }
+    }
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VidStore — Gallery</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="gallery-body">
+
+<!-- ===== HEADER / NAV ===== -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="topbar-brand" href="/gallery">
+      <span class="brand-icon">▶</span>
+      <span class="brand-name">VidStore</span>
+    </a>
+    <div class="topbar-actions">
+      <span class="topbar-user">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+        </svg>
+        {{ user.username }}
+      </span>
+      <form method="post" action="/logout" style="margin:0">
+        <button class="btn btn-ghost btn-sm" type="submit">Sign Out</button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<!-- ===== UPLOAD BAR ===== -->
+<section class="upload-section">
+  <div class="upload-inner">
+    {% if error %}
+    <div class="auth-error" style="margin-bottom: 1rem;">
+      <span>&#9888;</span> {{ error }}
+    </div>
+    {% endif %}
+    <form
+      id="uploadForm"
+      method="post"
+      action="/upload"
+      enctype="multipart/form-data"
+    >
+      <div
+        class="drop-zone"
+        id="dropZone"
+        onclick="document.getElementById('fileInput').click()"
+      >
+        <div class="drop-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <p class="drop-label">
+          <strong>Click to browse</strong> or drag &amp; drop files here
+        </p>
+        <p class="drop-hint">
+          Images: JPEG, PNG, GIF, WebP, AVIF &nbsp;·&nbsp; Videos: MP4, WebM, MOV, MKV
+        </p>
+        <input
+          type="file"
+          id="fileInput"
+          name="files"
+          multiple
+          accept="image/*,video/*"
+          style="display:none"
+          onchange="handleFileSelect(this)"
+        />
+      </div>
+
+      <!-- Selected file pills -->
+      <div class="file-pills" id="filePills"></div>
+
+      <div class="upload-actions" id="uploadActions" style="display:none">
+        <button class="btn btn-primary" type="submit" id="uploadBtn">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="20"/>
+          </svg>
+          Upload
+        </button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="clearFiles()">Clear</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<!-- ===== FILTER TABS ===== -->
+<nav class="filter-bar">
+  <div class="filter-inner">
+    <a
+      class="filter-tab {% if filter == 'all' %}active{% endif %}"
+      href="/gallery?filter=all"
+    >All &nbsp;<span class="tab-count">{{ counts.all }}</span></a>
+    <a
+      class="filter-tab {% if filter == 'images' %}active{% endif %}"
+      href="/gallery?filter=images"
+    >
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <circle cx="8.5" cy="8.5" r="1.5"/>
+        <polyline points="21 15 16 10 5 21"/>
+      </svg>
+      Photos &nbsp;<span class="tab-count">{{ counts.images }}</span>
+    </a>
+    <a
+      class="filter-tab {% if filter == 'videos' %}active{% endif %}"
+      href="/gallery?filter=videos"
+    >
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+      </svg>
+      Videos &nbsp;<span class="tab-count">{{ counts.videos }}</span>
+    </a>
+    <a
+      class="filter-tab fav-tab {% if filter == 'favourites' %}active{% endif %}"
+      href="/gallery?filter=favourites"
+    >
+      <svg class="icon" viewBox="0 0 24 24" fill="{% if filter == 'favourites' %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+      </svg>
+      Favourites &nbsp;<span class="tab-count">{{ counts.favourites }}</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ===== GALLERY GRID ===== -->
+<main class="gallery-main">
+  {% if items %}
+  <div class="media-grid" id="mediaGrid">
+    {% for item in items %}
+    <div class="media-card" data-id="{{ item.id }}" data-type="{{ item.media_type }}">
+
+      <!-- Thumbnail / Preview -->
+      <div
+        class="media-thumb"
+        onclick="openLightbox({{ item.id }}, '{{ item.media_type }}', '{{ item.original_name | e }}')"
+      >
+        {% if item.media_type == 'image' %}
+          <img
+            src="/media/{{ item.id }}"
+            alt="{{ item.original_name | e }}"
+            loading="lazy"
+          />
+        {% else %}
+          <video
+            class="thumb-video"
+            src="/media/{{ item.id }}"
+            preload="metadata"
+            muted
+            playsinline
+          ></video>
+          <div class="play-overlay">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="12" opacity="0.7"/>
+              <polygon points="10 8 18 12 10 16 10 8" fill="white"/>
+            </svg>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Card footer -->
+      <div class="media-info">
+        <span class="media-name" title="{{ item.original_name | e }}">
+          {{ item.original_name | truncate(28, True, '…') }}
+        </span>
+        <div class="media-actions">
+          <!-- Favourite toggle -->
+          <form method="post" action="/favourite/{{ item.id }}" style="margin:0">
+            <button
+              class="icon-btn {% if item.is_favourite %}fav-active{% endif %}"
+              title="{% if item.is_favourite %}Remove from favourites{% else %}Add to favourites{% endif %}"
+              type="submit"
+            >
+              <svg viewBox="0 0 24 24" fill="{% if item.is_favourite %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+            </button>
+          </form>
+          <!-- Delete -->
+          <form method="post" action="/delete/{{ item.id }}" style="margin:0"
+            onsubmit="return confirm('Delete «{{ item.original_name | e }}»? This cannot be undone.')">
+            <button class="icon-btn delete-btn" title="Delete" type="submit">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14H6L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4h6v2"/>
+              </svg>
+            </button>
+          </form>
+        </div>
+      </div>
+
+    </div><!-- /.media-card -->
+    {% endfor %}
+  </div><!-- /.media-grid -->
+
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">
+      {% if filter == 'favourites' %}⭐{% elif filter == 'images' %}🖼️{% elif filter == 'videos' %}🎬{% else %}📂{% endif %}
+    </div>
+    <h2>Nothing here yet</h2>
+    <p>
+      {% if filter == 'favourites' %}
+        Star a photo or video to add it to your favourites.
+      {% elif filter != 'all' %}
+        No {{ filter }} uploaded yet.
+      {% else %}
+        Upload your first photo or video above to get started.
+      {% endif %}
+    </p>
+  </div>
+  {% endif %}
+</main>
+
+<!-- ===== LIGHTBOX MODAL ===== -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer" style="display:none">
+  <div class="lb-backdrop" onclick="closeLightbox()"></div>
+  <div class="lb-panel">
+    <div class="lb-header">
+      <span class="lb-filename" id="lbFilename"></span>
+      <button class="lb-close" onclick="closeLightbox()" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="lb-content" id="lbContent">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- ===== SCRIPTS ===== -->
+<script>
+// ---- Drag & drop upload ----
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const dt = e.dataTransfer;
+  if (dt.files.length) {
+    fileInput.files = dt.files;
+    renderPills(dt.files);
+  }
+});
+
+function handleFileSelect(input) {
+  renderPills(input.files);
+}
+
+function renderPills(files) {
+  const container = document.getElementById('filePills');
+  container.innerHTML = '';
+  if (!files || !files.length) {
+    document.getElementById('uploadActions').style.display = 'none';
+    return;
+  }
+  for (const f of files) {
+    const pill = document.createElement('span');
+    pill.className = 'file-pill';
+    const type = f.type.startsWith('video') ? '🎬' : '🖼️';
+    pill.textContent = `${type} ${f.name} (${formatSize(f.size)})`;
+    container.appendChild(pill);
+  }
+  document.getElementById('uploadActions').style.display = 'flex';
+}
+
+function clearFiles() {
+  fileInput.value = '';
+  document.getElementById('filePills').innerHTML = '';
+  document.getElementById('uploadActions').style.display = 'none';
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+// Show progress on submit
+document.getElementById('uploadForm').addEventListener('submit', () => {
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading…';
+});
+
+// ---- Lightbox ----
+let currentVideo = null;
+
+function openLightbox(id, type, name) {
+  const lb      = document.getElementById('lightbox');
+  const content = document.getElementById('lbContent');
+  document.getElementById('lbFilename').textContent = name;
+
+  // Clear previous
+  if (currentVideo) { currentVideo.pause(); currentVideo = null; }
+  content.innerHTML = '';
+
+  const url = `/media/${id}`;
+  if (type === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    img.className = 'lb-image';
+    img.alt = name;
+    content.appendChild(img);
+  } else {
+    const vid = document.createElement('video');
+    vid.src = url;
+    vid.className = 'lb-video';
+    vid.controls = true;
+    vid.autoplay = true;
+    vid.playsInline = true;
+    content.appendChild(vid);
+    currentVideo = vid;
+  }
+
+  lb.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+  if (currentVideo) { currentVideo.pause(); currentVideo = null; }
+  document.getElementById('lightbox').style.display = 'none';
+  document.getElementById('lbContent').innerHTML = '';
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLightbox();
+});
+
+// ---- Thumb video hover preview ----
+document.querySelectorAll('.thumb-video').forEach(v => {
+  v.addEventListener('mouseenter', () => v.play().catch(() => {}));
+  v.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
+});
+</script>
+
+</body>
+</html>
