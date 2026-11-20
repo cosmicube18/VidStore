@@ -87,6 +87,13 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    # Handle Vercel /api prefix if present
+    path = request.scope.get("path", "")
+    if path == "/api":
+        request.scope["path"] = "/"
+    elif path.startswith("/api/"):
+        request.scope["path"] = path[4:]
+
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
@@ -154,6 +161,8 @@ def _require_user(
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=RedirectResponse)
+@app.get("/api", response_class=RedirectResponse)
+@app.get("/api/", response_class=RedirectResponse)
 def root(user: Optional[User] = Depends(_resolve_user)):
     return RedirectResponse(url="/gallery" if user else "/login", status_code=302)
 
