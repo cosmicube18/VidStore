@@ -105,6 +105,27 @@ def remove_media(user_id: int, filename: str) -> None:
         file_path.unlink(missing_ok=True)
 
 
+def get_signed_upload_url(user_id: int, filename: str) -> Optional[str]:
+    """Generate a single-use signed upload URL for the browser to PUT the file directly into Supabase."""
+    if not is_cloud_storage():
+        return None
+
+    object_path = f"{user_id}/{filename}"
+    url = f"{SUPABASE_URL}/storage/v1/object/upload/sign/{SUPABASE_BUCKET}/{object_path}"
+    headers = get_headers("application/json")
+    req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            upload_path = data.get("url")
+            if upload_path:
+                return f"{SUPABASE_URL}/storage/v1{upload_path}"
+    except Exception as e:
+        print(f"Error creating signed upload URL: {e}")
+        return None
+    return None
+
+
 def get_media_url(user_id: int, filename: str, expires_in: int = 7200) -> Optional[str]:
     """Generate a signed download/stream URL for cloud media."""
     if not is_cloud_storage():

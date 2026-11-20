@@ -75,6 +75,14 @@
       <!-- Selected file pills -->
       <div class="file-pills" id="filePills"></div>
 
+      <!-- Real-time upload progress bar -->
+      <div id="uploadProgress" style="display:none; margin-top: 0.9rem;">
+        <div style="background: var(--bg3); border-radius: 8px; height: 8px; overflow: hidden; width: 100%;">
+          <div id="uploadProgressBar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.15s ease;"></div>
+        </div>
+        <small id="uploadProgressText" style="color: var(--text2); display: block; margin-top: 0.4rem; font-size: 0.8rem;"></small>
+      </div>
+
       <div class="upload-actions" id="uploadActions" style="display:none">
         <button class="btn btn-primary" type="submit" id="uploadBtn">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -291,11 +299,105 @@ function formatSize(bytes) {
   return (bytes / 1073741824).toFixed(2) + ' GB';
 }
 
-// Show progress on submit
-document.getElementById('uploadForm').addEventListener('submit', () => {
+// Direct-to-Cloud Upload Handler (Bypasses Vercel 4.5 MB limit)
+document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const files = fileInput.files;
+  if (!files || !files.length) return;
+
   const btn = document.getElementById('uploadBtn');
   btn.disabled = true;
-  btn.textContent = 'Uploading…';
+  btn.textContent = 'Preparing…';
+
+  const progressBox = document.getElementById('uploadProgress');
+  const progressBar = document.getElementById('uploadProgressBar');
+  const progressText = document.getElementById('uploadProgressText');
+  progressBox.style.display = 'block';
+
+  let completed = 0;
+  const totalFiles = files.length;
+
+  for (let i = 0; i < totalFiles; i++) {
+    const file = files[i];
+    progressText.textContent = `Preparing ${file.name} (${i + 1} of ${totalFiles})…`;
+
+    try {
+      // 1. Get single-use signed upload URL from FastAPI (< 1 KB payload to Vercel)
+      const ticketRes = await fetch('/api/upload-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          content_type: file.type || 'application/octet-stream',
+          file_size: file.size
+        })
+      });
+
+      if (!ticketRes.ok) {
+        const errData = await ticketRes.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Upload rejected');
+      }
+
+      const ticket = await ticketRes.json();
+
+      if (ticket.mode === 'cloud') {
+        // 2. Direct upload to Supabase Storage via PUT (bypasses Vercel completely!)
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('PUT', ticket.upload_url);
+          xhr.setRequestHeader('Content-Type', ticket.content_type || file.type || 'application/octet-stream');
+
+          xhr.upload.onprogress = (evt) => {
+            if (evt.lengthComputable) {
+              const filePercent = Math.round((evt.loaded / evt.total) * 100);
+              const overall = Math.round(((completed + (evt.loaded / evt.total)) / totalFiles) * 100);
+              progressBar.style.width = `${overall}%`;
+              progressText.textContent = `Uploading ${file.name} — ${filePercent}% (${i + 1}/${totalFiles})`;
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`Storage rejected upload with status ${xhr.status}`));
+          };
+          xhr.onerror = () => reject(new Error('Network error during storage upload'));
+          xhr.send(file);
+        });
+
+        // 3. Finalize record in database
+        await fetch('/api/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stored_name: ticket.stored_name,
+            original_name: file.name,
+            media_type: ticket.media_type,
+            mime_type: ticket.content_type,
+            file_size: file.size
+          })
+        });
+      } else {
+        // Local mode fallback
+        const fd = new FormData();
+        fd.append('files', file);
+        await fetch('/upload', { method: 'POST', body: fd });
+      }
+
+      completed++;
+      progressBar.style.width = `${Math.round((completed / totalFiles) * 100)}%`;
+    } catch (err) {
+      console.error(err);
+      alert(`Error uploading ${file.name}: ${err.message}`);
+      btn.disabled = false;
+      btn.textContent = 'Upload';
+      return;
+    }
+  }
+
+  progressText.textContent = 'Upload complete! Refreshing gallery…';
+  setTimeout(() => {
+    window.location.href = '/gallery';
+  }, 600);
 });
 
 // ---- Lightbox ----

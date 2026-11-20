@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 import auth
 from auth import COOKIE_NAME, SESSION_MAX_AGE
 from database import MediaItem, User, get_db, init_db
+from pydantic import BaseModel
 import storage
 
 # ---------------------------------------------------------------------------
@@ -387,6 +388,87 @@ async def upload(
         return RedirectResponse(url=f"/gallery?error={error_msg}", status_code=302)
 
     return RedirectResponse(url="/gallery", status_code=302)
+
+
+class UploadTicketRequest(BaseModel):
+    filename: str
+    content_type: str
+    file_size: int
+
+class UploadCompleteRequest(BaseModel):
+    stored_name: str
+    original_name: str
+    media_type: str
+    mime_type: str
+    file_size: int
+
+
+@app.post("/api/upload-ticket")
+def create_upload_ticket(
+    payload: UploadTicketRequest,
+    user: Optional[User] = Depends(_resolve_user),
+):
+    """Generate a direct-to-cloud signed upload URL or specify local mode."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    filename = payload.filename.strip()
+    guessed_type, _ = mimetypes.guess_type(filename)
+    content_type = (payload.content_type or guessed_type or "").lower().split(";")[0].strip()
+
+    if content_type not in ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    if payload.file_size > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File exceeds 50 MB limit")
+
+    media_type = "image" if content_type in ALLOWED_IMAGE_TYPES else "video"
+    ext = Path(filename).suffix or mimetypes.guess_extension(content_type) or ""
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+
+    if storage.is_cloud_storage():
+        signed_upload_url = storage.get_signed_upload_url(user.id, stored_name)
+        if not signed_upload_url:
+            raise HTTPException(status_code=500, detail="Failed to generate upload ticket")
+        return {
+            "mode": "cloud",
+            "upload_url": signed_upload_url,
+            "stored_name": stored_name,
+            "media_type": media_type,
+            "content_type": content_type,
+        }
+    else:
+        return {
+            "mode": "local",
+            "upload_url": "/upload",
+            "stored_name": stored_name,
+            "media_type": media_type,
+            "content_type": content_type,
+        }
+
+
+@app.post("/api/upload-complete")
+def finalize_upload(
+    payload: UploadCompleteRequest,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(_resolve_user),
+):
+    """Finalize upload by saving file metadata to the database."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    item = MediaItem(
+        filename=payload.stored_name,
+        original_name=payload.original_name,
+        media_type=payload.media_type,
+        mime_type=payload.mime_type,
+        file_size=payload.file_size,
+        user_id=user.id,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"status": "ok", "id": item.id}
 
 
 # ---------------------------------------------------------------------------
