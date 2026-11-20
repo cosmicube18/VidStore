@@ -42,31 +42,45 @@ for env_name in ("Keys.env", ".env"):
                     if k not in os.environ:
                         os.environ[k] = v
 
-raw_db_url = os.environ.get("DATABASE_URL")
+IS_VERCEL = bool(os.environ.get("VERCEL"))
 
-if raw_db_url:
-    # Normalize postgresql:// to postgresql+psycopg2:// so SQLAlchemy uses psycopg2
+raw_db_url = os.environ.get("DATABASE_URL", "").strip().strip('"').strip("'")
+
+_PLACEHOLDER_TOKENS = ("[PASSWORD]", "[YOUR-PASSWORD]", "[YOUR_PASSWORD]")
+
+if raw_db_url and not any(tok in raw_db_url for tok in _PLACEHOLDER_TOKENS):
+    # Normalize dialect prefix so SQLAlchemy uses psycopg2 (not psycopg v3)
     if raw_db_url.startswith("postgres://"):
         raw_db_url = raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
     elif raw_db_url.startswith("postgresql://") and not raw_db_url.startswith("postgresql+"):
         raw_db_url = raw_db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     DATABASE_URL = raw_db_url
+    DB_BACKEND = "postgresql"
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,
         pool_recycle=300,
     )
+    print("[VidStore] Database backend: postgresql (Supabase)")
 else:
-    # On Vercel, the repository root is read-only. Fall back to /tmp/
-    if os.environ.get("VERCEL"):
-        sqlite_path = "/tmp/vidstore.db"
-    else:
-        sqlite_path = str(BASE_DIR / "vidstore.db")
+    if IS_VERCEL:
+        if not raw_db_url:
+            reason = "missing (not set in Vercel Environment Variables)"
+        else:
+            reason = "contains an unreplaced placeholder — replace [PASSWORD] with your real Supabase password"
+        raise RuntimeError(
+            f"DATABASE_URL is {reason}. "
+            "A PostgreSQL DATABASE_URL is required on Vercel. "
+            "Go to Vercel Project Settings → Environment Variables and set it."
+        )
+    sqlite_path = str(BASE_DIR / "vidstore.db")
     DATABASE_URL = f"sqlite:///{sqlite_path}"
+    DB_BACKEND = "sqlite"
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False},
     )
+    print("[VidStore] Database backend: sqlite (local dev)")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

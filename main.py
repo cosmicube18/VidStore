@@ -113,6 +113,31 @@ def _is_secure(request: Request) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Health check (GET) — no auth required, no secrets exposed
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+def health_check(db: Session = Depends(get_db)):
+    from database import DB_BACKEND, IS_VERCEL
+    from sqlalchemy import text as sa_text
+    db_connected = False
+    db_error = None
+    try:
+        db.execute(sa_text("SELECT 1"))
+        db_connected = True
+    except Exception as exc:
+        db_error = str(exc)[:200]
+    return {
+        "status": "ok" if db_connected else "degraded",
+        "environment": "vercel" if IS_VERCEL else "local",
+        "database_backend": DB_BACKEND,
+        "database_connected": db_connected,
+        "database_error": db_error,
+        "storage_backend": storage._storage_backend,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Allowed media types & limits
 # ---------------------------------------------------------------------------
 

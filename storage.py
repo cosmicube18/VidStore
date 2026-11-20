@@ -48,6 +48,9 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "gallery")
 
+_storage_backend = "supabase" if (SUPABASE_URL and SUPABASE_KEY) else "local"
+print(f"[VidStore] Storage backend: {_storage_backend}")
+
 
 def is_cloud_storage() -> bool:
     """Return True if Supabase storage credentials are configured."""
