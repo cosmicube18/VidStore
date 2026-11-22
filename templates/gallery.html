@@ -179,6 +179,30 @@
   </div>
 </nav>
 
+<!-- ===== SEARCH TOOLBAR ===== -->
+<div class="gallery-toolbar">
+  <div class="gallery-toolbar-inner">
+    <div class="search-box">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input
+        type="search"
+        id="searchInput"
+        placeholder="Search by filename…"
+        autocomplete="off"
+        oninput="filterCards(this.value)"
+      />
+      <button type="button" class="search-clear hidden" id="searchClear" onclick="clearSearch()" aria-label="Clear search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <span class="result-count" id="resultCount"></span>
+  </div>
+</div>
+
 <!-- ===== GALLERY GRID ===== -->
 <main class="gallery-main">
   {% if items %}
@@ -189,7 +213,10 @@
       <!-- Thumbnail / Preview -->
       <div
         class="media-thumb"
-        onclick="openLightbox({{ item.id }}, '{{ item.media_type }}', '{{ item.original_name | e }}', {{ item.folder_id if item.folder_id else 'null' }})"
+        data-id="{{ item.id }}"
+        data-type="{{ item.media_type }}"
+        data-name="{{ item.original_name | e }}"
+        data-folder="{{ item.folder_id if item.folder_id else '' }}"
       >
         {% if item.media_type == 'image' %}
           <img
@@ -247,9 +274,9 @@
             </button>
           </form>
           <!-- Delete -->
-          <form method="post" action="/delete/{{ item.id }}" style="margin:0"
-            onsubmit="return confirm('Delete «{{ item.original_name | e }}»? This cannot be undone.')">
-            <button class="icon-btn delete-btn" title="Delete" type="submit">
+          <form method="post" action="/delete/{{ item.id }}" style="margin:0" id="del-form-{{ item.id }}">
+            <button class="icon-btn delete-btn" title="Delete" type="submit"
+              onclick='return confirmDelete(event, {{ item.id }}, {{ item.original_name | tojson }})'>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"/>
                 <path d="M19 6l-1 14H6L5 6"/>
@@ -266,7 +293,7 @@
   </div><!-- /.media-grid -->
 
   {% else %}
-  <div class="empty-state">
+  <div class="empty-state" id="emptyState">
     <div class="empty-icon">
       {% if show_uncategorized %}📂
       {% elif active_folder_id %}📁
@@ -289,6 +316,11 @@
         Upload your first photo or video above to get started.
       {% endif %}
     </p>
+  </div>
+  <div class="empty-state hidden" id="noResults">
+    <div class="empty-icon">🔍</div>
+    <h2>No matches</h2>
+    <p>Try a different filename search.</p>
   </div>
   {% endif %}
 </main>
@@ -318,8 +350,26 @@
     <div class="lb-content" id="lbContent">
       <!-- Populated by JS -->
     </div>
+    <button class="lb-nav lb-prev" onclick="navLightbox(-1)" aria-label="Previous" title="Previous (←)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <button class="lb-nav lb-next" onclick="navLightbox(1)" aria-label="Next" title="Next (→)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
   </div>
 </div>
+
+<!-- ===== MODAL ROOT ===== -->
+<div class="modal-root" id="modalRoot" style="display:none">
+  <div class="modal-backdrop" onclick="closeModal()"></div>
+  <div class="modal-panel" role="dialog" aria-modal="true">
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- ===== TOAST ROOT ===== -->
+<div class="toast-root" id="toastRoot"></div>
 
 <!-- ===== SCRIPTS ===== -->
 <script>
@@ -331,6 +381,164 @@ const FOLDERS = [
   { id: {{ folder.id }}, name: {{ folder.name | tojson }} }{% if not loop.last %},{% endif %}
   {% endfor %}
 ];
+
+// ============================================================
+//  Toast notifications
+// ============================================================
+function toast(message, type = 'info', duration = 3500) {
+  const root = document.getElementById('toastRoot');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<span class="toast-dot"></span><span class="toast-msg"></span>`;
+  el.querySelector('.toast-msg').textContent = message;
+  root.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
+
+// ============================================================
+//  Modal dialog (replaces native prompt/confirm/alert)
+// ============================================================
+let _modalResolve = null;
+
+function openModal({ title, body, actions }) {
+  const root = document.getElementById('modalRoot');
+  const bodyEl = document.getElementById('modalBody');
+  const actionsEl = document.getElementById('modalActions');
+  bodyEl.innerHTML = '';
+  actionsEl.innerHTML = '';
+
+  if (title) {
+    const h = document.createElement('h3');
+    h.className = 'modal-title';
+    h.textContent = title;
+    bodyEl.appendChild(h);
+  }
+
+  if (typeof body === 'string') {
+    const p = document.createElement('p');
+    p.className = 'modal-text';
+    p.textContent = body;
+    bodyEl.appendChild(p);
+  } else if (body instanceof Node) {
+    bodyEl.appendChild(body);
+  }
+
+  const close = (value) => {
+    root.style.display = 'none';
+    if (_modalResolve) { const r = _modalResolve; _modalResolve = null; r(value); }
+  };
+
+  (actions || [{ label: 'OK', value: true, primary: true }]).forEach(act => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn ' + (act.primary ? 'btn-primary' : 'btn-ghost');
+    btn.textContent = act.label;
+    btn.addEventListener('click', () => close(act.value));
+    actionsEl.appendChild(btn);
+  });
+
+  root.style.display = 'flex';
+  requestAnimationFrame(() => root.classList.add('show'));
+  return new Promise(resolve => { _modalResolve = resolve; });
+}
+
+function closeModal() {
+  const root = document.getElementById('modalRoot');
+  root.classList.remove('show');
+  root.style.display = 'none';
+  if (_modalResolve) { const r = _modalResolve; _modalResolve = null; r(null); }
+}
+
+// Confirm dialog → resolves true/false
+function confirmDialog(message, title = 'Are you sure?') {
+  return openModal({
+    title,
+    body: message,
+    actions: [
+      { label: 'Cancel', value: false },
+      { label: 'Confirm', value: true, primary: true },
+    ],
+  });
+}
+
+// Text prompt dialog → resolves string or null
+function promptDialog(message, defaultValue = '', title = 'Input') {
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-field';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'modal-input';
+    input.value = defaultValue;
+    input.placeholder = message;
+    wrap.appendChild(input);
+    document.getElementById('modalRoot');
+    const root = document.getElementById('modalRoot');
+    const bodyEl = document.getElementById('modalBody');
+    const actionsEl = document.getElementById('modalActions');
+    bodyEl.innerHTML = '';
+    actionsEl.innerHTML = '';
+    const h = document.createElement('h3');
+    h.className = 'modal-title'; h.textContent = title;
+    bodyEl.appendChild(h); bodyEl.appendChild(wrap);
+
+    const finish = (val) => { closeModal(); resolve(val); };
+    const ok = document.createElement('button');
+    ok.type = 'button'; ok.className = 'btn btn-primary'; ok.textContent = 'Save';
+    ok.addEventListener('click', () => finish(input.value.trim() || null));
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'btn btn-ghost'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => finish(null));
+    actionsEl.appendChild(cancel); actionsEl.appendChild(ok);
+
+    root.style.display = 'flex';
+    requestAnimationFrame(() => root.classList.add('show'));
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(input.value.trim() || null); }
+    });
+    _modalResolve = null;
+  });
+}
+
+// ============================================================
+//  Live search / filter cards by filename
+// ============================================================
+function filterCards(query) {
+  const q = (query || '').trim().toLowerCase();
+  const cards = document.querySelectorAll('.media-card');
+  const clearBtn = document.getElementById('searchClear');
+  const countEl = document.getElementById('resultCount');
+  const noResults = document.getElementById('noResults');
+  const emptyState = document.getElementById('emptyState');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !q);
+
+  let visible = 0;
+  cards.forEach(card => {
+    const name = (card.querySelector('.media-name')?.textContent || '').toLowerCase();
+    const match = !q || name.includes(q);
+    card.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+
+  if (countEl) {
+    if (q) countEl.textContent = `${visible} result${visible === 1 ? '' : 's'}`;
+    else countEl.textContent = '';
+  }
+  if (noResults) noResults.classList.toggle('hidden', !(q && visible === 0 && cards.length > 0));
+  if (emptyState && q) emptyState.style.display = 'none';
+  else if (emptyState) emptyState.style.display = '';
+}
+
+function clearSearch() {
+  const input = document.getElementById('searchInput');
+  if (input) { input.value = ''; input.focus(); }
+  filterCards('');
+}
 
 // ---- Upload hint when in a folder ----
 (function() {
@@ -486,7 +694,7 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
       progressBar.style.width = `${Math.round((completed / totalFiles) * 100)}%`;
     } catch (err) {
       console.error(err);
-      alert(`Error uploading ${file.name}: ${err.message}`);
+      toast(`Error uploading ${file.name}: ${err.message}`, 'error', 5000);
       btn.disabled = false;
       btn.textContent = 'Upload';
       return;
@@ -505,58 +713,65 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
 
 // ---- Folder management ----
 async function createFolder() {
-  const name = prompt('New folder name:');
-  if (!name || !name.trim()) return;
+  const name = await promptDialog('Enter a name for the new folder', '', 'New Folder');
+  if (!name) return;
   try {
     const res = await fetch('/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim() })
+      body: JSON.stringify({ name })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.detail || 'Failed to create folder');
+      toast(err.detail || 'Failed to create folder', 'error');
       return;
     }
     const folder = await res.json();
+    toast(`Folder “${folder.name}” created`, 'success');
     window.location.href = `/gallery?folder_id=${folder.id}`;
   } catch (e) {
-    alert('Network error');
+    toast('Network error', 'error');
   }
 }
 
 async function renameFolder(id, currentName) {
-  const name = prompt('Rename folder:', currentName);
-  if (!name || !name.trim() || name.trim() === currentName) return;
+  const name = await promptDialog('Enter a new name', currentName, 'Rename Folder');
+  if (!name || name === currentName) return;
   try {
     const res = await fetch(`/folders/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim() })
+      body: JSON.stringify({ name })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.detail || 'Failed to rename folder');
+      toast(err.detail || 'Failed to rename folder', 'error');
       return;
     }
+    toast('Folder renamed', 'success');
     window.location.reload();
   } catch (e) {
-    alert('Network error');
+    toast('Network error', 'error');
   }
 }
 
 async function deleteFolder(id, name) {
-  if (!confirm(`Delete folder "${name}"?\n\nAll media inside will move to Uncategorized. Files are not deleted.`)) return;
+  const ok = await confirmDialog(
+    `Delete folder “${name}”?\n\nAll media inside will move to Uncategorized. Files are not deleted.`,
+    'Delete Folder'
+  );
+  if (!ok) return;
   try {
     const res = await fetch(`/folders/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.detail || 'Failed to delete folder');
+      toast(err.detail || 'Failed to delete folder', 'error');
       return;
     }
+    toast('Folder deleted', 'success');
     window.location.href = '/gallery';
   } catch (e) {
-    alert('Network error');
+    toast('Network error', 'error');
   }
 }
 
@@ -587,7 +802,7 @@ async function moveMedia(mediaId, folderId) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.detail || 'Failed to move media');
+      toast(err.detail || 'Failed to move media', 'error');
       return;
     }
     // If viewing a specific folder, remove card from view; otherwise just update data attr
@@ -603,16 +818,54 @@ async function moveMedia(mediaId, folderId) {
       }
     }
   } catch (e) {
-    alert('Network error');
+    toast('Network error', 'error');
+  }
+}
+
+// ---- Delete with styled confirm ----
+async function confirmDelete(event, id, name) {
+  event.preventDefault();
+  const ok = await confirmDialog(
+    `Delete “${name}”?\n\nThis cannot be undone.`,
+    'Delete Media'
+  );
+  if (!ok) return;
+  try {
+    const res = await fetch(`/delete/${id}`, { method: 'POST' });
+    if (!res.ok) { toast('Failed to delete', 'error'); return; }
+    toast('Media deleted', 'success');
+    const card = document.querySelector(`.media-card[data-id="${id}"]`);
+    if (card) {
+      card.style.opacity = '0';
+      card.style.transition = 'opacity 0.3s';
+      setTimeout(() => card.remove(), 300);
+    }
+  } catch (e) {
+    toast('Network error', 'error');
   }
 }
 
 // ---- Lightbox ----
 let currentVideo = null;
 let currentLbMediaId = null;
+let lbGalleryIds = [];
+
+// Build the ordered list of currently-visible media IDs (respects search filter)
+function getVisibleMediaIds() {
+  return Array.from(document.querySelectorAll('.media-card'))
+    .filter(c => c.style.display !== 'none')
+    .map(c => ({
+      id: parseInt(c.dataset.id, 10),
+      type: c.dataset.type,
+      folder: c.dataset.folder || '',
+      name: (c.querySelector('.media-name')?.textContent || '').trim(),
+    }));
+}
+
+let lbItems = [];
 
 function openLightbox(id, type, name, folderId) {
-  currentLbMediaId = id;
+  lbItems = getVisibleMediaIds();
   const lb      = document.getElementById('lightbox');
   const content = document.getElementById('lbContent');
   document.getElementById('lbFilename').textContent = name;
@@ -642,8 +895,30 @@ function openLightbox(id, type, name, folderId) {
     currentVideo = vid;
   }
 
+  currentLbMediaId = id;
+  updateLbNav();
   lb.style.display = 'flex';
   document.body.style.overflow = 'hidden';
+  document.getElementById('lbFilename').textContent = name;
+}
+
+function updateLbNav() {
+  const idx = lbItems.findIndex(i => i.id === currentLbMediaId);
+  const prevBtn = document.querySelector('.lb-prev');
+  const nextBtn = document.querySelector('.lb-next');
+  const multi = lbItems.length > 1;
+  if (prevBtn) prevBtn.style.display = (multi && idx > 0) ? 'flex' : 'none';
+  if (nextBtn) nextBtn.style.display = (multi && idx < lbItems.length - 1) ? 'flex' : 'none';
+}
+
+function navLightbox(dir) {
+  if (!lbItems.length) return;
+  const idx = lbItems.findIndex(i => i.id === currentLbMediaId);
+  let next = idx + dir;
+  if (next < 0 || next >= lbItems.length) return;
+  const item = lbItems[next];
+  openLightbox(item.id, item.type, item.name, item.folder || null);
+  // re-openLightbox resets lbItems order correctly since it reads from DOM again
 }
 
 async function lbMoveMedia(select) {
@@ -663,13 +938,28 @@ function closeLightbox() {
 }
 
 document.addEventListener('keydown', e => {
+  const lbOpen = document.getElementById('lightbox').style.display === 'flex';
+  if (!lbOpen) return;
   if (e.key === 'Escape') closeLightbox();
+  else if (e.key === 'ArrowLeft') navLightbox(-1);
+  else if (e.key === 'ArrowRight') navLightbox(1);
 });
 
 // ---- Thumb video hover preview ----
 document.querySelectorAll('.thumb-video').forEach(v => {
   v.addEventListener('mouseenter', () => v.play().catch(() => {}));
   v.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
+});
+
+// ---- Delegated thumbnail click (opens lightbox) ----
+document.getElementById('mediaGrid')?.addEventListener('click', e => {
+  const thumb = e.target.closest('.media-thumb');
+  if (!thumb) return;
+  const id = parseInt(thumb.dataset.id, 10);
+  const type = thumb.dataset.type;
+  const name = thumb.dataset.name || '';
+  const folder = thumb.dataset.folder || null;
+  openLightbox(id, type, name, folder);
 });
 </script>
 
