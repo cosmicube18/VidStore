@@ -58,7 +58,7 @@
         <p class="drop-label">
           <strong>Click to browse</strong> or drag &amp; drop files here
         </p>
-        <p class="drop-hint">
+        <p class="drop-hint" id="uploadHint">
           Images: JPEG, PNG, GIF, WebP, AVIF &nbsp;·&nbsp; Videos: MP4, WebM, MOV, MKV
         </p>
         <input
@@ -100,11 +100,11 @@
 <nav class="filter-bar">
   <div class="filter-inner">
     <a
-      class="filter-tab {% if filter == 'all' %}active{% endif %}"
+      class="filter-tab {% if filter == 'all' and not active_folder_id and not show_uncategorized %}active{% endif %}"
       href="/gallery?filter=all"
     >All &nbsp;<span class="tab-count">{{ counts.all }}</span></a>
     <a
-      class="filter-tab {% if filter == 'images' %}active{% endif %}"
+      class="filter-tab {% if filter == 'images' and not active_folder_id and not show_uncategorized %}active{% endif %}"
       href="/gallery?filter=images"
     >
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -115,7 +115,7 @@
       Photos &nbsp;<span class="tab-count">{{ counts.images }}</span>
     </a>
     <a
-      class="filter-tab {% if filter == 'videos' %}active{% endif %}"
+      class="filter-tab {% if filter == 'videos' and not active_folder_id and not show_uncategorized %}active{% endif %}"
       href="/gallery?filter=videos"
     >
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -124,14 +124,58 @@
       Videos &nbsp;<span class="tab-count">{{ counts.videos }}</span>
     </a>
     <a
-      class="filter-tab fav-tab {% if filter == 'favourites' %}active{% endif %}"
+      class="filter-tab fav-tab {% if filter == 'favourites' and not active_folder_id and not show_uncategorized %}active{% endif %}"
       href="/gallery?filter=favourites"
     >
-      <svg class="icon" viewBox="0 0 24 24" fill="{% if filter == 'favourites' %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2">
+      <svg class="icon" viewBox="0 0 24 24" fill="{% if filter == 'favourites' and not active_folder_id and not show_uncategorized %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2">
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
       </svg>
       Favourites &nbsp;<span class="tab-count">{{ counts.favourites }}</span>
     </a>
+
+    <!-- Separator -->
+    <span class="filter-separator"></span>
+
+    <!-- Uncategorized pill -->
+    <a
+      class="filter-tab {% if show_uncategorized %}active{% endif %}"
+      href="/gallery?folder_id=uncategorized"
+    >
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      Uncategorized &nbsp;<span class="tab-count">{{ uncategorized_count }}</span>
+    </a>
+
+    <!-- User folder pills -->
+    {% for folder in folders %}
+    <span class="filter-tab-folder {% if active_folder_id == folder.id %}active{% endif %}" data-folder-id="{{ folder.id }}" data-folder-name="{{ folder.name | e }}">
+      <a
+        class="filter-tab folder-pill {% if active_folder_id == folder.id %}active{% endif %}"
+        href="/gallery?folder_id={{ folder.id }}"
+      >
+        <svg class="icon" viewBox="0 0 24 24" fill="{% if active_folder_id == folder.id %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        {{ folder.name | truncate(20, True, '…') }}
+        &nbsp;<span class="tab-count">{{ folder_counts[folder.id] }}</span>
+      </a>
+      {% if active_folder_id == folder.id %}
+      <span class="folder-actions">
+        <button class="icon-btn folder-rename-btn" title="Rename folder" onclick="renameFolder({{ folder.id }}, '{{ folder.name | e }}')">✏️</button>
+        <button class="icon-btn folder-delete-btn" title="Delete folder" onclick="deleteFolder({{ folder.id }}, '{{ folder.name | e }}')">🗑️</button>
+      </span>
+      {% endif %}
+    </span>
+    {% endfor %}
+
+    <!-- New folder button -->
+    <button class="filter-tab new-folder-btn" onclick="createFolder()" title="New folder">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      New Folder
+    </button>
   </div>
 </nav>
 
@@ -140,12 +184,12 @@
   {% if items %}
   <div class="media-grid" id="mediaGrid">
     {% for item in items %}
-    <div class="media-card" data-id="{{ item.id }}" data-type="{{ item.media_type }}">
+    <div class="media-card" data-id="{{ item.id }}" data-type="{{ item.media_type }}" data-folder="{{ item.folder_id if item.folder_id else '' }}">
 
       <!-- Thumbnail / Preview -->
       <div
         class="media-thumb"
-        onclick="openLightbox({{ item.id }}, '{{ item.media_type }}', '{{ item.original_name | e }}')"
+        onclick="openLightbox({{ item.id }}, '{{ item.media_type }}', '{{ item.original_name | e }}', {{ item.folder_id if item.folder_id else 'null' }})"
       >
         {% if item.media_type == 'image' %}
           <img
@@ -176,6 +220,20 @@
           {{ item.original_name | truncate(28, True, '…') }}
         </span>
         <div class="media-actions">
+          <!-- Move to folder -->
+          <div class="move-menu-wrap" title="Move to folder">
+            <button class="icon-btn move-btn" onclick="toggleMoveMenu(this, {{ item.id }})">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+            <div class="move-menu" id="move-menu-{{ item.id }}" style="display:none">
+              <div class="move-menu-item {% if not item.folder_id %}move-menu-active{% endif %}" onclick="moveMedia({{ item.id }}, null)">📂 Uncategorized</div>
+              {% for folder in folders %}
+              <div class="move-menu-item {% if item.folder_id == folder.id %}move-menu-active{% endif %}" onclick="moveMedia({{ item.id }}, {{ folder.id }})">📁 {{ folder.name | truncate(22, True, '…') }}</div>
+              {% endfor %}
+            </div>
+          </div>
           <!-- Favourite toggle -->
           <form method="post" action="/favourite/{{ item.id }}" style="margin:0">
             <button
@@ -210,11 +268,20 @@
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">
-      {% if filter == 'favourites' %}⭐{% elif filter == 'images' %}🖼️{% elif filter == 'videos' %}🎬{% else %}📂{% endif %}
+      {% if show_uncategorized %}📂
+      {% elif active_folder_id %}📁
+      {% elif filter == 'favourites' %}⭐
+      {% elif filter == 'images' %}🖼️
+      {% elif filter == 'videos' %}🎬
+      {% else %}📂{% endif %}
     </div>
     <h2>Nothing here yet</h2>
     <p>
-      {% if filter == 'favourites' %}
+      {% if show_uncategorized %}
+        All media is organized into folders.
+      {% elif active_folder_id %}
+        This folder is empty. Upload files or move some here.
+      {% elif filter == 'favourites' %}
         Star a photo or video to add it to your favourites.
       {% elif filter != 'all' %}
         No {{ filter }} uploaded yet.
@@ -232,11 +299,21 @@
   <div class="lb-panel">
     <div class="lb-header">
       <span class="lb-filename" id="lbFilename"></span>
-      <button class="lb-close" onclick="closeLightbox()" title="Close (Esc)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
+      <div class="lb-header-actions">
+        <!-- Move select in lightbox -->
+        <select class="lb-move-select" id="lbMoveSelect" onchange="lbMoveMedia(this)" title="Move to folder">
+          <option value="">Move to…</option>
+          <option value="null">📂 Uncategorized</option>
+          {% for folder in folders %}
+          <option value="{{ folder.id }}">📁 {{ folder.name }}</option>
+          {% endfor %}
+        </select>
+        <button class="lb-close" onclick="closeLightbox()" title="Close (Esc)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="lb-content" id="lbContent">
       <!-- Populated by JS -->
@@ -246,6 +323,26 @@
 
 <!-- ===== SCRIPTS ===== -->
 <script>
+// ---- Jinja2 data passed to JS ----
+const ACTIVE_FOLDER_ID = {{ active_folder_id if active_folder_id else 'null' }};
+const SHOW_UNCATEGORIZED = {{ 'true' if show_uncategorized else 'false' }};
+const FOLDERS = [
+  {% for folder in folders %}
+  { id: {{ folder.id }}, name: {{ folder.name | tojson }} }{% if not loop.last %},{% endif %}
+  {% endfor %}
+];
+
+// ---- Upload hint when in a folder ----
+(function() {
+  const hint = document.getElementById('uploadHint');
+  {% if active_folder_id %}
+  hint.innerHTML = '📁 Uploading to: <strong>{{ (folders | selectattr("id", "equalto", active_folder_id) | first).name | default("") | e }}</strong>';
+  hint.style.color = 'var(--accent)';
+  {% elif show_uncategorized %}
+  hint.textContent = 'Files will be added uncategorized.';
+  {% endif %}
+})();
+
 // ---- Drag & drop upload ----
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -322,15 +419,17 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
     progressText.textContent = `Preparing ${file.name} (${i + 1} of ${totalFiles})…`;
 
     try {
-      // 1. Get single-use signed upload URL from FastAPI (< 1 KB payload to Vercel)
+      const ticketBody = {
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        file_size: file.size
+      };
+      if (ACTIVE_FOLDER_ID) ticketBody.folder_id = ACTIVE_FOLDER_ID;
+
       const ticketRes = await fetch('/upload-ticket', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          content_type: file.type || 'application/octet-stream',
-          file_size: file.size
-        })
+        body: JSON.stringify(ticketBody)
       });
 
       if (!ticketRes.ok) {
@@ -341,7 +440,6 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
       const ticket = await ticketRes.json();
 
       if (ticket.mode === 'cloud') {
-        // 2. Direct upload to Supabase Storage via PUT (bypasses Vercel completely!)
         await new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open('PUT', ticket.upload_url);
@@ -364,20 +462,21 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
           xhr.send(file);
         });
 
-        // 3. Finalize record in database
+        const completeBody = {
+          stored_name: ticket.stored_name,
+          original_name: file.name,
+          media_type: ticket.media_type,
+          mime_type: ticket.content_type,
+          file_size: file.size
+        };
+        if (ACTIVE_FOLDER_ID) completeBody.folder_id = ACTIVE_FOLDER_ID;
+
         await fetch('/upload-complete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            stored_name: ticket.stored_name,
-            original_name: file.name,
-            media_type: ticket.media_type,
-            mime_type: ticket.content_type,
-            file_size: file.size
-          })
+          body: JSON.stringify(completeBody)
         });
       } else {
-        // Local mode fallback
         const fd = new FormData();
         fd.append('files', file);
         await fetch('/upload', { method: 'POST', body: fd });
@@ -396,19 +495,132 @@ document.getElementById('uploadForm').addEventListener('submit', async (e) => {
 
   progressText.textContent = 'Upload complete! Refreshing gallery…';
   setTimeout(() => {
-    window.location.href = '/gallery';
+    // Preserve current folder context after upload
+    let url = '/gallery';
+    if (ACTIVE_FOLDER_ID) url += `?folder_id=${ACTIVE_FOLDER_ID}`;
+    else if (SHOW_UNCATEGORIZED) url += '?folder_id=uncategorized';
+    window.location.href = url;
   }, 600);
 });
 
+// ---- Folder management ----
+async function createFolder() {
+  const name = prompt('New folder name:');
+  if (!name || !name.trim()) return;
+  try {
+    const res = await fetch('/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to create folder');
+      return;
+    }
+    const folder = await res.json();
+    window.location.href = `/gallery?folder_id=${folder.id}`;
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
+async function renameFolder(id, currentName) {
+  const name = prompt('Rename folder:', currentName);
+  if (!name || !name.trim() || name.trim() === currentName) return;
+  try {
+    const res = await fetch(`/folders/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to rename folder');
+      return;
+    }
+    window.location.reload();
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
+async function deleteFolder(id, name) {
+  if (!confirm(`Delete folder "${name}"?\n\nAll media inside will move to Uncategorized. Files are not deleted.`)) return;
+  try {
+    const res = await fetch(`/folders/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to delete folder');
+      return;
+    }
+    window.location.href = '/gallery';
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
+// ---- Move media (card) ----
+function toggleMoveMenu(btn, mediaId) {
+  // Close all other menus
+  document.querySelectorAll('.move-menu').forEach(m => {
+    if (m.id !== `move-menu-${mediaId}`) m.style.display = 'none';
+  });
+  const menu = document.getElementById(`move-menu-${mediaId}`);
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+// Close move menus on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.move-menu-wrap')) {
+    document.querySelectorAll('.move-menu').forEach(m => m.style.display = 'none');
+  }
+});
+
+async function moveMedia(mediaId, folderId) {
+  document.querySelectorAll('.move-menu').forEach(m => m.style.display = 'none');
+  try {
+    const res = await fetch(`/media/${mediaId}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: folderId })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Failed to move media');
+      return;
+    }
+    // If viewing a specific folder, remove card from view; otherwise just update data attr
+    const card = document.querySelector(`.media-card[data-id="${mediaId}"]`);
+    if (card) {
+      const isFiltered = ACTIVE_FOLDER_ID !== null || SHOW_UNCATEGORIZED;
+      if (isFiltered) {
+        card.style.opacity = '0';
+        card.style.transition = 'opacity 0.3s';
+        setTimeout(() => card.remove(), 300);
+      } else {
+        card.dataset.folder = folderId || '';
+      }
+    }
+  } catch (e) {
+    alert('Network error');
+  }
+}
+
 // ---- Lightbox ----
 let currentVideo = null;
+let currentLbMediaId = null;
 
-function openLightbox(id, type, name) {
+function openLightbox(id, type, name, folderId) {
+  currentLbMediaId = id;
   const lb      = document.getElementById('lightbox');
   const content = document.getElementById('lbContent');
   document.getElementById('lbFilename').textContent = name;
 
-  // Clear previous
+  // Set move select to current folder
+  const sel = document.getElementById('lbMoveSelect');
+  sel.value = folderId ? String(folderId) : 'null';
+
   if (currentVideo) { currentVideo.pause(); currentVideo = null; }
   content.innerHTML = '';
 
@@ -434,8 +646,17 @@ function openLightbox(id, type, name) {
   document.body.style.overflow = 'hidden';
 }
 
+async function lbMoveMedia(select) {
+  const val = select.value;
+  if (!val || !currentLbMediaId) return;
+  const folderId = val === 'null' ? null : parseInt(val, 10);
+  await moveMedia(currentLbMediaId, folderId);
+  select.value = '';
+}
+
 function closeLightbox() {
   if (currentVideo) { currentVideo.pause(); currentVideo = null; }
+  currentLbMediaId = null;
   document.getElementById('lightbox').style.display = 'none';
   document.getElementById('lbContent').innerHTML = '';
   document.body.style.overflow = '';

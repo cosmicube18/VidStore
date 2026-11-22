@@ -3,7 +3,7 @@ database.py — SQLAlchemy engine, session factory, and ORM models.
 
 Supports:
 - PostgreSQL (e.g. Supabase Postgres via DATABASE_URL)
-- SQLite (Local development and /tmp/ fallback on Vercel)
+- SQLite (Local development fallback)
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
     create_engine,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 
@@ -110,6 +112,23 @@ class User(Base):
     created_at: datetime = Column(DateTime, default=utc_now)
 
     media_items = relationship("MediaItem", back_populates="owner", cascade="all, delete-orphan")
+    folders = relationship("Folder", back_populates="owner", cascade="all, delete-orphan")
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id: int = Column(Integer, primary_key=True, index=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: str = Column(String(100), nullable=False)
+    created_at: datetime = Column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_folder_user_name"),
+    )
+
+    owner = relationship("User", back_populates="folders")
+    media_items = relationship("MediaItem", back_populates="folder")
 
 
 class MediaItem(Base):
@@ -125,7 +144,10 @@ class MediaItem(Base):
     is_favourite: bool = Column(Boolean, default=False)
 
     user_id: int = Column(Integer, ForeignKey("users.id"), nullable=False)
+    folder_id: int = Column(Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True)
+
     owner = relationship("User", back_populates="media_items")
+    folder = relationship("Folder", back_populates="media_items")
 
 
 # ---------------------------------------------------------------------------
@@ -142,5 +164,24 @@ def get_db():
 
 
 def init_db() -> None:
-    """Create all tables (safe to call repeatedly)."""
+    """Create all tables (safe to call repeatedly) and apply safe column migrations."""
     Base.metadata.create_all(bind=engine)
+
+    # Safe idempotent migration: add folder_id to existing media_items tables
+    with engine.connect() as conn:
+        if DB_BACKEND == "postgresql":
+            conn.execute(text(
+                "ALTER TABLE media_items "
+                "ADD COLUMN IF NOT EXISTS folder_id INTEGER "
+                "REFERENCES folders(id) ON DELETE SET NULL"
+            ))
+            conn.commit()
+        else:
+            # SQLite: check via PRAGMA
+            cols = conn.execute(text("PRAGMA table_info(media_items)")).fetchall()
+            col_names = [row[1] for row in cols]
+            if "folder_id" not in col_names:
+                conn.execute(text(
+                    "ALTER TABLE media_items ADD COLUMN folder_id INTEGER REFERENCES folders(id)"
+                ))
+                conn.commit()

@@ -2,16 +2,23 @@
 main.py — VidStore FastAPI application entry-point.
 
 Routes:
-- GET  /                   → redirect to /gallery or /login
-- GET  /login              → login/register page
-- POST /login              → authenticate user, set session cookie
-- POST /register           → create account, set session cookie
-- POST /logout             → clear session cookie
-- GET  /gallery            → authenticated gallery page
-- POST /upload             → upload one or more files
-- GET  /media/{item_id}    → stream or redirect to protected media
-- POST /favourite/{id}     → toggle favourite flag
-- POST /delete/{id}        → delete a media item
+- GET  /                       → redirect to /gallery or /login
+- GET  /login                  → login/register page
+- POST /login                  → authenticate user, set session cookie
+- POST /register               → create account, set session cookie
+- POST /logout                 → clear session cookie
+- GET  /gallery                → authenticated gallery page (supports ?filter=&folder_id=)
+- POST /upload                 → upload one or more files (multipart fallback)
+- GET  /media/{item_id}        → stream or redirect to protected media
+- POST /favourite/{id}         → toggle favourite flag
+- POST /delete/{id}            → delete a media item
+- POST /folders                → create a folder
+- PATCH /folders/{id}          → rename a folder
+- DELETE /folders/{id}         → delete a folder
+- PATCH /media/{id}/move       → move media to a folder
+- POST /upload-ticket          → get signed upload URL
+- POST /upload-complete        → finalize upload record
+- GET  /health                 → health check
 """
 
 from __future__ import annotations
@@ -43,7 +50,7 @@ from sqlalchemy.orm import Session
 
 import auth
 from auth import COOKIE_NAME, SESSION_MAX_AGE
-from database import MediaItem, User, get_db, init_db
+from database import Folder, MediaItem, User, get_db, init_db
 from pydantic import BaseModel
 import storage
 
@@ -306,7 +313,8 @@ def logout():
 @app.get("/gallery", response_class=HTMLResponse)
 def gallery(
     request: Request,
-    filter: str = "all",   # all | images | videos | favourites
+    filter: str = "all",        # all | images | videos | favourites
+    folder_id: Optional[str] = None,  # int | "uncategorized" | None
     error: Optional[str] = None,
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(_resolve_user),
@@ -314,7 +322,32 @@ def gallery(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # --- resolve active folder ---
+    active_folder_id: Optional[int] = None
+    show_uncategorized = False
+    if folder_id == "uncategorized":
+        show_uncategorized = True
+    elif folder_id is not None:
+        try:
+            active_folder_id = int(folder_id)
+        except ValueError:
+            pass
+
+    # --- base query ---
     q = db.query(MediaItem).filter(MediaItem.user_id == user.id)
+
+    if show_uncategorized:
+        q = q.filter(MediaItem.folder_id.is_(None))
+    elif active_folder_id is not None:
+        # Verify ownership before filtering
+        folder_obj = db.query(Folder).filter(
+            Folder.id == active_folder_id, Folder.user_id == user.id
+        ).first()
+        if not folder_obj:
+            active_folder_id = None
+        else:
+            q = q.filter(MediaItem.folder_id == active_folder_id)
+
     if filter == "images":
         q = q.filter(MediaItem.media_type == "image")
     elif filter == "videos":
@@ -324,6 +357,7 @@ def gallery(
 
     items: List[MediaItem] = q.order_by(MediaItem.uploaded_at.desc()).all()
 
+    # --- counts ---
     total = db.query(MediaItem).filter(MediaItem.user_id == user.id).count()
     img_count = db.query(MediaItem).filter(
         MediaItem.user_id == user.id, MediaItem.media_type == "image"
@@ -334,6 +368,17 @@ def gallery(
     fav_count = db.query(MediaItem).filter(
         MediaItem.user_id == user.id, MediaItem.is_favourite == True  # noqa: E712
     ).count()
+    uncategorized_count = db.query(MediaItem).filter(
+        MediaItem.user_id == user.id, MediaItem.folder_id.is_(None)
+    ).count()
+
+    # --- folders with per-folder counts ---
+    user_folders = db.query(Folder).filter(Folder.user_id == user.id).order_by(Folder.name).all()
+    folder_counts = {}
+    for f in user_folders:
+        folder_counts[f.id] = db.query(MediaItem).filter(
+            MediaItem.user_id == user.id, MediaItem.folder_id == f.id
+        ).count()
 
     return templates.TemplateResponse(
         request=request,
@@ -349,12 +394,17 @@ def gallery(
                 "videos": vid_count,
                 "favourites": fav_count,
             },
+            "folders": user_folders,
+            "folder_counts": folder_counts,
+            "active_folder_id": active_folder_id,
+            "show_uncategorized": show_uncategorized,
+            "uncategorized_count": uncategorized_count,
         },
     )
 
 
 # ---------------------------------------------------------------------------
-# Upload (POST) — authenticated
+# Upload (POST) — multipart fallback
 # ---------------------------------------------------------------------------
 
 @app.post("/upload")
@@ -384,7 +434,6 @@ async def upload(
         ext = Path(file.filename).suffix or mimetypes.guess_extension(content_type) or ""
         stored_name = f"{uuid.uuid4().hex}{ext}"
 
-        # Read content
         content = await file.read()
         file_size = len(content)
 
@@ -415,10 +464,15 @@ async def upload(
     return RedirectResponse(url="/gallery", status_code=302)
 
 
+# ---------------------------------------------------------------------------
+# Upload ticket & complete — direct-to-cloud flow
+# ---------------------------------------------------------------------------
+
 class UploadTicketRequest(BaseModel):
     filename: str
     content_type: str
     file_size: int
+    folder_id: Optional[int] = None
 
 class UploadCompleteRequest(BaseModel):
     stored_name: str
@@ -426,17 +480,27 @@ class UploadCompleteRequest(BaseModel):
     media_type: str
     mime_type: str
     file_size: int
+    folder_id: Optional[int] = None
 
 
 @app.post("/upload-ticket")
 @app.post("/api/upload-ticket")
 def create_upload_ticket(
     payload: UploadTicketRequest,
+    db: Session = Depends(get_db),
     user: Optional[User] = Depends(_resolve_user),
 ):
     """Generate a direct-to-cloud signed upload URL or specify local mode."""
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Validate folder ownership if provided
+    if payload.folder_id is not None:
+        folder = db.query(Folder).filter(
+            Folder.id == payload.folder_id, Folder.user_id == user.id
+        ).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
 
     filename = payload.filename.strip()
     guessed_type, _ = mimetypes.guess_type(filename)
@@ -484,6 +548,16 @@ def finalize_upload(
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # Validate folder ownership if provided
+    folder_id = None
+    if payload.folder_id is not None:
+        folder = db.query(Folder).filter(
+            Folder.id == payload.folder_id, Folder.user_id == user.id
+        ).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        folder_id = payload.folder_id
+
     item = MediaItem(
         filename=payload.stored_name,
         original_name=payload.original_name,
@@ -491,11 +565,124 @@ def finalize_upload(
         mime_type=payload.mime_type,
         file_size=payload.file_size,
         user_id=user.id,
+        folder_id=folder_id,
     )
     db.add(item)
     db.commit()
     db.refresh(item)
     return {"status": "ok", "id": item.id}
+
+
+# ---------------------------------------------------------------------------
+# Folder CRUD endpoints
+# ---------------------------------------------------------------------------
+
+class FolderCreateRequest(BaseModel):
+    name: str
+
+class FolderRenameRequest(BaseModel):
+    name: str
+
+
+@app.post("/folders")
+def create_folder(
+    payload: FolderCreateRequest,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(_resolve_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name cannot be empty")
+    existing = db.query(Folder).filter(
+        Folder.user_id == user.id, Folder.name == name
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="A folder with that name already exists")
+    folder = Folder(user_id=user.id, name=name)
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return {"id": folder.id, "name": folder.name, "count": 0}
+
+
+@app.patch("/folders/{folder_id}")
+def rename_folder(
+    folder_id: int,
+    payload: FolderRenameRequest,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(_resolve_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    folder = db.query(Folder).filter(
+        Folder.id == folder_id, Folder.user_id == user.id
+    ).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name cannot be empty")
+    # Check uniqueness (excluding self)
+    conflict = db.query(Folder).filter(
+        Folder.user_id == user.id, Folder.name == name, Folder.id != folder_id
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail="A folder with that name already exists")
+    folder.name = name
+    db.commit()
+    return {"id": folder.id, "name": folder.name}
+
+
+@app.delete("/folders/{folder_id}")
+def delete_folder(
+    folder_id: int,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(_resolve_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    folder = db.query(Folder).filter(
+        Folder.id == folder_id, Folder.user_id == user.id
+    ).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    # ON DELETE SET NULL handles media_items automatically via DB constraint
+    db.delete(folder)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Move media to a folder
+# ---------------------------------------------------------------------------
+
+class MoveMediaRequest(BaseModel):
+    folder_id: Optional[int] = None
+
+
+@app.patch("/media/{media_id}/move")
+def move_media(
+    media_id: int,
+    payload: MoveMediaRequest,
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(_resolve_user),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    item = db.get(MediaItem, media_id)
+    if not item or item.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Media not found")
+    if payload.folder_id is not None:
+        folder = db.query(Folder).filter(
+            Folder.id == payload.folder_id, Folder.user_id == user.id
+        ).first()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+    item.folder_id = payload.folder_id
+    db.commit()
+    return {"ok": True, "folder_id": item.folder_id}
 
 
 # ---------------------------------------------------------------------------
